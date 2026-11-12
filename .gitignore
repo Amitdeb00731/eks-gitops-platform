@@ -1,0 +1,41 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+*.tfvars
+!example.tfvars
+
+# Credentials and secrets
+.env
+*.env
+.env.*
+*.pem
+*.key
+kubeconfig
+*.kubeconfig
+.aws/
+credentials
+secrets.yaml
+secrets.yml
+
+# Kubernetes and Helm local state
+charts/
+*.tgz
+
+# Local tooling
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Evidence working files (raw captures stay local; curated evidence is committed)
+evidence/**/raw/
