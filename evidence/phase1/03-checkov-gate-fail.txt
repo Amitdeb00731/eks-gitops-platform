@@ -1,0 +1,14 @@
+# Checkov gate proof, Phase 1 (Checkov 3.4.5, 2026-11-17)
+# The aws_s3_bucket_public_access_block resource was deleted from terraform/bootstrap/main.tf,
+# the scan rerun, then the file restored (see 02-checkov-baseline.txt for the clean result).
+
+$ checkov -d terraform --config-file terraform/policy/.checkov.yaml --quiet
+terraform scan results:
+
+Passed checks: 91, Failed checks: 1, Skipped checks: 15
+
+Check: CKV2_AWS_6: "Ensure that S3 bucket has a Public Access block"
+	FAILED for resource: aws_s3_bucket.state
+	File: /bootstrap/main.tf:51-56
+
+exit code: 1

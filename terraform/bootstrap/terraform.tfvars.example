@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and set a globally unique bucket name.
+region            = "eu-north-1"
+state_bucket_name = "eks-gitops-platform-tfstate-CHANGE-ME"

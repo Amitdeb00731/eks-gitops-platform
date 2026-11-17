@@ -1,0 +1,26 @@
+# terraform fmt and validate, Phase 1
+# Terraform v1.17.2, hashicorp/aws provider 6.73.0, 2026-11-17
+
+$ terraform fmt -check -recursive terraform
+(no output: all files correctly formatted)
+
+$ cd terraform/bootstrap && terraform init -backend=false && terraform validate
+Success! The configuration is valid.
+
+
+$ cd terraform/modules/network && terraform init -backend=false && terraform validate
+Success! The configuration is valid.
+
+
+$ cd terraform/envs/dev && terraform init -backend=false && terraform validate
+Success! The configuration is valid.
+
+
+$ cd terraform/envs/staging && terraform init -backend=false && terraform validate
+Success! The configuration is valid.
+
+
+$ cd terraform/envs/prod && terraform init -backend=false && terraform validate
+Success! The configuration is valid.
+
+

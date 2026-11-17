@@ -12,7 +12,8 @@ override.tf.json
 .terraformrc
 terraform.rc
 *.tfvars
-!example.tfvars
+# Per-environment values hold no secrets and are part of the reviewed change.
+!terraform/envs/*/*.tfvars
 
 # Credentials and secrets
 .env

@@ -1,0 +1,7 @@
+# Checkov configuration for the pre-apply policy gate.
+# Run from the repository root:
+#   checkov -d terraform --config-file terraform/policy/.checkov.yaml
+framework:
+  - terraform
+compact: true
+skip-download: true

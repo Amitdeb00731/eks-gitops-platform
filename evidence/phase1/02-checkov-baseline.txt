@@ -1,0 +1,10 @@
+# Checkov baseline, Phase 1 (Checkov 3.4.5, 2026-11-17)
+# --quiet lists failures only; the summary line counts every check.
+
+$ checkov -d terraform --config-file terraform/policy/.checkov.yaml --quiet
+terraform scan results:
+
+Passed checks: 96, Failed checks: 0, Skipped checks: 15
+
+
+exit code: 0
