@@ -1,0 +1,29 @@
+# Phase 1 evidence: state locking refuses a concurrent run
+# Captured 2026-11-17. Window 1 held an apply at its approval prompt (lock held);
+# window 2 attempted a second run against the same state and was refused.
+# No resources were created: window 1 then answered "no". Full capture: raw/staging-lock-refused.txt.
+
+# Window 2, while window 1 holds the lock:
+$ terraform plan -var-file=staging.tfvars
+
+Error: Error acquiring the state lock
+
+Error message: operation error S3: PutObject, https response error
+StatusCode: 412, api error PreconditionFailed: At least one of the pre-conditions
+you specified did not hold
+Lock Info:
+  ID:        5193a994-01ae-9bac-7041-ec3401483a96
+  Path:      eks-gitops-platform-tfstate-1794939771/envs/staging/terraform.tfstate
+  Operation: OperationTypeApply
+  Who:       LAPTOP-3INDFT93\Amit@LAPTOP-3INDFT93
+  Created:   2026-11-17 18:50:10 UTC
+
+# The HTTP 412 PreconditionFailed is the S3 native lock in action: Terraform writes
+# the lock object with a conditional request, which S3 refuses because the object
+# already exists. Window 1 then answered "no" and the lock was released.
+
+# Window 1:
+Do you want to perform these actions?
+  Enter a value: no
+
+Apply cancelled.

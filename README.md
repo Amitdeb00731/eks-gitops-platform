@@ -9,7 +9,7 @@ The question it answers is the one a bank platform team lives with: application
 teams push code all the time, so how does that code reach customers safely, with
 every change controlled, reversible, observed and auditable.
 
-**Status:** Phase 1 in progress. See the phase table below.
+**Status:** Phase 1 complete. See the phase table below.
 
 ## Why this exists
 
@@ -73,7 +73,7 @@ running at the moment a reviewer looks.
 
 | Phase | Area | Tier | Status |
 | --- | --- | --- | --- |
-| 1 | Multi-environment Terraform foundation | Designed and validated | In progress |
+| 1 | Multi-environment Terraform foundation | Designed and validated | Complete |
 | 2 | EKS cluster and workload identity | Built live, briefly | Planned |
 | 3 | GitOps delivery (GitLab CI and ArgoCD) | Local and live | Planned |
 | 4 | Progressive delivery and rollback | Local | Planned |

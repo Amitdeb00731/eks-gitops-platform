@@ -1,29 +1,32 @@
 # Phase 1: multi-environment Terraform foundation
 
-**Tier:** designed and validated. Everything here is written and proven with
-`terraform validate`, `terraform plan` and a policy scan. One environment is
-applied for real during the Phase 2 bring-up; the other two are proven by plan.
+**Tier:** designed and validated. The code is proven with `terraform fmt`,
+`terraform validate`, a policy scan and `terraform plan`. The only resources
+created in this phase are the state backend (one S3 bucket and one KMS key).
+The dev network is applied for real during the Phase 2 bring-up; staging and
+production are proven by plan.
 
 **Goal:** a repeatable, reviewable way to define AWS infrastructure for three
-environments (dev, staging, production) from reusable modules, with remote state
-in S3, state locking in DynamoDB, and a policy gate that runs before anything is
-applied.
+environments (dev, staging, production) from reusable modules, with encrypted
+and versioned remote state, state locking, and a policy gate that runs before
+anything is applied.
 
 **Risk and resilience framing:** this is infrastructure as code with environment
 segregation and a pre-apply control gate. In bank terms it gives change control
 (every change is a reviewed, planned diff), segregation of environments (separate
 state and separate blast radius per environment), and an auditable record of what
-was applied and when.
+was applied and when. The policy gate is a preventive control, and its documented
+exceptions are recorded risk acceptances.
 
 ## Layout
 
 ```
 terraform/
-  bootstrap/        creates the state bucket and lock table (run once)
+  bootstrap/        state bucket and its KMS key (run once, local state)
   modules/
-    network/        VPC, subnets, routing (wraps the community VPC module)
+    network/        VPC, subnets, routing, flow logs, default-deny security group
   envs/
-    dev/            backend + composition + variables for dev
+    dev/            backend, composition and values for dev
     staging/
     prod/
   policy/           Checkov configuration and the baseline
@@ -31,350 +34,173 @@ terraform/
 
 Modules hold reusable building blocks with no environment-specific values. The
 `envs/` directories compose those modules and carry the only per-environment
-differences (CIDR ranges, sizes, the state key). This keeps the three
-environments identical in shape and different only where they must be.
+differences (the state key and the CIDR ranges). The three environments are
+identical in shape, so a change proven in dev behaves the same in production.
 
-## Step 1: the remote state backend
+## Design choices
 
-Terraform state records what exists. It must be shared (so the team sees the same
-state), versioned (so a bad apply can be recovered) and locked (so two applies
-cannot run at once). S3 provides the shared, versioned store; a DynamoDB table
-provides the lock.
+- **State locking uses the S3 native lock file** (`use_lockfile = true`,
+  Terraform 1.10 and later) rather than a DynamoDB table. DynamoDB locking is
+  deprecated in current Terraform, and the native lock removes a resource. See
+  [ADR 0004](adr/0004-s3-native-state-locking.md).
+- **The network module is written from native resources** rather than wrapping a
+  community module, so every resource is visible to the policy scan and the
+  module carries only what the platform needs. See
+  [ADR 0005](adr/0005-network-module-from-native-resources.md).
+- **State is encrypted with a customer-managed KMS key.** State can hold
+  sensitive values, so the key policy, not just bucket access, decides who can
+  read it. The key costs about one US dollar a month while it exists.
+- **VPC flow logs are on by default**, encrypted with their own KMS key and kept
+  for 365 days. This mirrors the Security Hub control (EC2.6) remediated in the
+  cloud IAM build.
+- **NAT gateways default off.** They are the quiet monthly cost, so they are only
+  switched on when a private workload genuinely needs outbound access.
+- **No account-specific value is committed.** The state bucket name and key ARN
+  are passed at `terraform init` time.
 
-There is a chicken-and-egg problem: the backend cannot store its own creation in
-a backend that does not yet exist. Solve it with a small bootstrap that runs once
-with local state, then never changes.
+## Prerequisites
 
-`terraform/bootstrap/main.tf`:
+- Terraform 1.10 or later (`winget install Hashicorp.Terraform`), AWS CLI v2 and
+  Checkov (`pip install checkov`).
+- Short-lived credentials for the workload account. The account has no standing
+  privilege: an operator assumes a role with MFA, using the helper from the
+  [cloud IAM build](https://github.com/Amitdeb00731/cloud-iam-lab-aws), which
+  exports temporary credentials into the shell. From this repository's root, with
+  the two repositories side by side, confirm them before anything else:
 
-```hcl
-terraform {
-  required_version = ">= 1.6.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-provider "aws" {
-  region = var.region
-  default_tags {
-    tags = {
-      project = "eks-gitops-platform"
-      tier    = "foundation"
-    }
-  }
-}
-
-resource "aws_s3_bucket" "state" {
-  bucket = var.state_bucket_name
-}
-
-resource "aws_s3_bucket_versioning" "state" {
-  bucket = aws_s3_bucket.state.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
-  bucket = aws_s3_bucket.state.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "aws:kms"
-    }
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "state" {
-  bucket                  = aws_s3_bucket.state.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_dynamodb_table" "lock" {
-  name         = var.lock_table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-}
+```
+source ../cloud-iam-lab-aws/scripts/assume-role.sh <6-digit-MFA-code>   # ContributorRole
+aws sts get-caller-identity
 ```
 
-`terraform/bootstrap/variables.tf`:
+`ContributorRole` (PowerUserAccess) is enough for this phase, because the
+bootstrap creates only S3 and KMS resources and the environments are only
+planned. The network module creates an IAM role for flow logs, so the dev apply
+in Phase 2 runs as the elevated `AdminJITRole`. Credentials last about an hour;
+re-source with a fresh code if they expire.
 
-```hcl
-variable "region" {
-  type        = string
-  description = "The account's pinned Region."
-}
+The Region is `eu-north-1`, which the account's service control policy pins.
 
-variable "state_bucket_name" {
-  type        = string
-  description = "Globally unique name for the state bucket."
-}
+## Step 1: the policy gate, before anything touches AWS
 
-variable "lock_table_name" {
-  type        = string
-  default     = "eks-gitops-platform-tf-lock"
-  description = "DynamoDB table for state locking."
-}
+No Terraform is applied until it passes a policy scan. Checkov reads the code and
+flags insecure configuration before it reaches AWS.
+
+```
+checkov -d terraform --config-file terraform/policy/.checkov.yaml
 ```
 
-Run it once:
+The expected baseline is 96 passed, 0 failed, 15 skipped. Every skip is an
+inline `checkov:skip` comment with its reason, listed in
+[terraform/policy/README.md](../terraform/policy/README.md).
+
+**Prove the gate works by failing it first.** Delete the
+`aws_s3_bucket_public_access_block` resource from `terraform/bootstrap/main.tf`
+(and the `depends_on` line that refers to it) and rerun the scan. It fails on
+`CKV2_AWS_6` (S3 bucket has no public access block). Capture that failure,
+restore the file with `git checkout terraform/bootstrap/main.tf`, and rerun to
+show the clean baseline. The paired failing and passing output is the evidence
+that the gate catches real misconfiguration, not that it simply ran.
+
+## Step 2: bootstrap the state backend
+
+Terraform state records what exists. It must be shared, versioned (so a bad apply
+can be recovered) and locked (so two runs cannot write at once). There is a
+chicken-and-egg problem: the backend cannot store its own creation in a backend
+that does not yet exist, so a small bootstrap runs once with local state.
 
 ```
 cd terraform/bootstrap
+cp terraform.tfvars.example terraform.tfvars    # set a globally unique bucket name
 terraform init
-terraform apply
+terraform plan -out=bootstrap.tfplan
+terraform apply bootstrap.tfplan
 ```
 
-The bootstrap keeps local state on purpose. It changes rarely, and committing its
-state is avoided (it is git-ignored). The bucket and table it creates are what
-every environment then uses.
+The plan shows 9 resources: the bucket (versioned, KMS-encrypted, public access
+blocked, TLS-only bucket policy, ACLs disabled, superseded versions expired after
+90 days) and the KMS key with rotation enabled, plus its alias. The bootstrap's
+local state and `terraform.tfvars` are git-ignored.
 
-## Step 2: a reusable module
-
-Modules are the reusable blocks. The network module is the first; the EKS module
-arrives in Phase 2. The network module wraps the community VPC module so the
-platform gets a well-tested VPC with the small set of options the build needs.
-
-`terraform/modules/network/main.tf`:
-
-```hcl
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "~> 5.0"
-
-  name = "${var.environment}-platform"
-  cidr = var.cidr
-
-  azs             = var.azs
-  private_subnets = var.private_subnets
-  public_subnets  = var.public_subnets
-
-  enable_nat_gateway = var.enable_nat_gateway
-  single_nat_gateway = true
-
-  # Tags the EKS and load balancer controllers rely on to place resources.
-  public_subnet_tags = {
-    "kubernetes.io/role/elb" = "1"
-  }
-  private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = "1"
-  }
-}
-```
-
-`terraform/modules/network/variables.tf`:
-
-```hcl
-variable "environment" {
-  type        = string
-  description = "dev, staging or prod."
-}
-
-variable "cidr" {
-  type        = string
-  description = "VPC CIDR range."
-}
-
-variable "azs" {
-  type        = list(string)
-  description = "Availability Zones to spread across."
-}
-
-variable "private_subnets" {
-  type = list(string)
-}
-
-variable "public_subnets" {
-  type = list(string)
-}
-
-variable "enable_nat_gateway" {
-  type        = bool
-  default     = false
-  description = "NAT gateways cost money. Off by default; on only when a private workload needs egress."
-}
-```
-
-`terraform/modules/network/outputs.tf`:
-
-```hcl
-output "vpc_id" {
-  value = module.vpc.vpc_id
-}
-
-output "private_subnet_ids" {
-  value = module.vpc.private_subnets
-}
-
-output "public_subnet_ids" {
-  value = module.vpc.public_subnets
-}
-```
-
-NAT gateways default off. They are the quiet monthly cost, so they are only
-switched on when a private workload genuinely needs outbound access, and never
-left on at rest.
-
-## Step 3: the environment overlays
-
-Each environment is a thin composition: a backend block pointing at its own state
-key, the provider, and a call to the module with that environment's values.
-
-`terraform/envs/dev/backend.tf`:
-
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "REPLACE_WITH_STATE_BUCKET"
-    key            = "envs/dev/terraform.tfstate"
-    region         = "REPLACE_WITH_REGION"
-    dynamodb_table = "eks-gitops-platform-tf-lock"
-    encrypt        = true
-  }
-}
-```
-
-The `key` differs per environment (`envs/staging/...`, `envs/prod/...`), so the
-three environments never share state. The bucket and lock table are the same.
-
-`terraform/envs/dev/main.tf`:
-
-```hcl
-terraform {
-  required_version = ">= 1.6.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
-provider "aws" {
-  region = var.region
-  default_tags {
-    tags = {
-      project     = "eks-gitops-platform"
-      environment = var.environment
-    }
-  }
-}
-
-module "network" {
-  source = "../../modules/network"
-
-  environment     = var.environment
-  cidr            = var.cidr
-  azs             = var.azs
-  private_subnets = var.private_subnets
-  public_subnets  = var.public_subnets
-}
-```
-
-`terraform/envs/dev/dev.tfvars`:
-
-```hcl
-region          = "REPLACE_WITH_REGION"
-environment     = "dev"
-cidr            = "10.10.0.0/16"
-azs             = ["REGIONa", "REGIONb", "REGIONc"]
-private_subnets = ["10.10.1.0/24", "10.10.2.0/24", "10.10.3.0/24"]
-public_subnets  = ["10.10.101.0/24", "10.10.102.0/24", "10.10.103.0/24"]
-```
-
-Staging and production use the same files with their own CIDR ranges
-(`10.20.0.0/16`, `10.30.0.0/16`) and larger sizes where it matters. Keeping the
-three identical in shape is the point: a change proven in dev behaves the same in
-production.
-
-Validate and plan each environment without applying:
+Keep the two outputs for the next step:
 
 ```
-cd terraform/envs/dev
-terraform init
+export TF_STATE_BUCKET=$(terraform output -raw state_bucket_name)
+export TF_STATE_KMS_KEY=$(terraform output -raw state_kms_key_arn)
+```
+
+## Step 3: initialise, validate and plan each environment
+
+Each environment has its own state key (`envs/dev/terraform.tfstate`,
+`envs/staging/...`, `envs/prod/...`), so the three never share state. The bucket
+and key are supplied at init time:
+
+```
+cd terraform/envs/staging
+terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="kms_key_id=$TF_STATE_KMS_KEY"
 terraform validate
-terraform plan -var-file=dev.tfvars
+terraform plan -var-file=staging.tfvars -out=staging.tfplan
 ```
 
-`validate` and a clean `plan` are the Phase 1 evidence for staging and
-production. Dev is the environment applied for real in Phase 2.
+Repeat for `dev` and `prod`. Each plan should show 23 resources to add, the same
+shape in every environment, differing only in CIDR ranges and names. Nothing is
+applied in this phase; dev is applied in Phase 2.
 
-## Step 4: the policy gate (fail then prove)
-
-No Terraform is applied until it passes a policy scan. Checkov reads the code and
-flags insecure configuration before it reaches AWS. This is the pre-apply control
-gate.
-
-Run it over the whole tree:
+The first `terraform init` writes `.terraform.lock.hcl`, which pins the exact
+provider build. Commit it, after adding the Linux hashes so a CI runner gets the
+same provider:
 
 ```
-checkov --directory terraform/ --download-external-modules true
+terraform providers lock -platform=windows_amd64 -platform=linux_amd64
 ```
 
-Prove the gate works by failing it first. Temporarily remove the public-access
-block from the bootstrap bucket:
+## Step 4: prove state locking (no resources created)
 
-```hcl
-# resource "aws_s3_bucket_public_access_block" "state" { ... }  # commented out
-```
-
-Checkov fails with `CKV_AWS_53` to `CKV_AWS_56` (S3 bucket missing public-access
-restrictions). Capture that failure, restore the block, and show the same scan
-passing. The paired failing-then-passing output is the evidence that the gate
-catches real misconfiguration, not that it simply ran.
-
-`terraform/policy/README.md` records the baseline and any rule that is
-deliberately skipped, each with a reason.
-
-## Step 5: prove state locking
-
-State locking stops two applies corrupting state. Prove it: start an apply in one
-shell and, while it holds the lock, start another in a second shell.
+State locking stops two runs corrupting state. `terraform apply` holds the lock
+while it waits at its approval prompt, which gives a safe way to prove the lock
+without creating anything.
 
 ```
-# shell 1
-terraform apply -var-file=dev.tfvars
+# shell 1, in terraform/envs/staging: stop at the prompt, do not answer yet
+terraform apply -var-file=staging.tfvars
 
-# shell 2, while shell 1 is mid-apply
-terraform apply -var-file=dev.tfvars
-# Error: Error acquiring the state lock ... ConditionalCheckFailedException
+# shell 2, same directory, while shell 1 is waiting
+terraform plan -var-file=staging.tfvars
+# Error: Error acquiring the state lock
 ```
 
-The second apply is refused with a lock error naming the DynamoDB table. That
-refusal is the evidence that the lock works.
+Shell 2 is refused and the lock information names the `.tflock` object in the
+state bucket. Then answer `no` in shell 1, so nothing is applied and the lock is
+released. The refusal is the evidence that the lock works.
 
 ## Evidence to capture (into `evidence/phase1/`)
 
-- `terraform validate` output for all three environments.
-- `terraform plan` output for staging and production (no changes to apply beyond
-  the intended resources).
-- The Checkov scan failing on the removed public-access block, then passing.
-- The state-lock error from the concurrent apply.
-- The bootstrap apply result (bucket and table created).
+Already captured from a clean build environment (see
+[evidence/phase1/](../evidence/phase1/README.md)):
+
+- `terraform fmt` and `terraform validate` for all five configurations.
+- The Checkov baseline, and the gate failing on the removed public access block.
+
+Captured during the AWS steps:
+
+- The bootstrap apply and its outputs (bucket and key created).
+- `terraform plan` for dev, staging and production.
+- The state-lock refusal from the concurrent run.
 
 ## Done checklist
 
 _These boxes are an operator runbook for a reader reproducing this phase. The
 as-built result is recorded in the evidence files, not in these boxes._
 
-- [ ] Bootstrap applied; state bucket and lock table exist
-- [ ] Network module written, validated
-- [ ] Three environment overlays written, each with its own state key
-- [ ] `terraform validate` clean for dev, staging and prod
-- [ ] `terraform plan` captured for staging and prod
-- [ ] Checkov gate shown failing on a bad config, then passing
-- [ ] State lock shown refusing a concurrent apply
-- [ ] Evidence saved under `evidence/phase1/`
+- [x] Policy gate shown failing on a bad configuration, then passing
+- [x] Bootstrap applied; state bucket and KMS key exist
+- [x] Each environment initialised against its own state key
+- [x] `terraform validate` clean for dev, staging and prod
+- [x] `terraform plan` captured for dev, staging and prod
+- [x] State lock shown refusing a concurrent run
+- [x] Provider lock file committed with Windows and Linux hashes
+- [x] Evidence saved under `evidence/phase1/`
 
-**Next, Phase 2:** stand up the EKS cluster, node groups, IAM roles for service
-accounts and the load balancer controller, and capture the live evidence.
+**Next, Phase 2:** add the EKS module (cluster, managed node group, OIDC provider
+for IAM roles for service accounts) and the load balancer controller, apply dev
+for a single evidence run, and destroy it the same day.
