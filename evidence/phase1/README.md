@@ -19,12 +19,15 @@ inspect the public access block's own settings no longer have a resource to
 inspect. The one failure is the check that every bucket has a public access block
 at all, which is the control that matters.
 
-## AWS proof (to be captured)
+## AWS proof (captured 2026-11-17)
 
 | File | What it proves |
 | --- | --- |
-| `04-bootstrap-apply.txt` | The state bucket and KMS key exist, created from a reviewed plan. |
-| `05-plan-dev.txt`, `06-plan-staging.txt`, `07-plan-prod.txt` | Each environment initialises against its own state key and plans the same 23 resources. |
-| `08-state-lock.txt` | A second run is refused while the first holds the state lock. |
+| [04-bootstrap-apply.txt](04-bootstrap-apply.txt) | The state bucket and KMS key were created from a reviewed plan (9 resources added). |
+| [05-plan-dev.txt](05-plan-dev.txt), [06-plan-staging.txt](06-plan-staging.txt), [07-plan-prod.txt](07-plan-prod.txt) | Each environment initialised against its own state key, validated, and planned the same 23 resources. Nothing was applied. |
+| [08-state-lock.txt](08-state-lock.txt) | A second run was refused while the first held the state lock (S3 native lock, HTTP 412). No resources were created. |
+
+The apply created only the state backend. The three environments were planned, not
+applied; the dev network is applied in Phase 2.
 
 Raw terminal captures and screenshots go under `raw/`, which is git-ignored.

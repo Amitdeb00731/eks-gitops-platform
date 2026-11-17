@@ -1,0 +1,29 @@
+# Phase 1 evidence: bootstrap apply (state backend created)
+# Captured 2026-11-17 on the operator workstation, Terraform 1.13.4, hashicorp/aws 6.x,
+# assumed role ContributorRole in account 963910216975, Region eu-north-1.
+# Full terminal capture: raw/bootstrap-plan.txt and raw/bootstrap-apply.txt.
+
+$ terraform plan -out=bootstrap.tfplan
+  (9 resources to add: the KMS key and its alias, and the S3 state bucket with its
+   versioning, encryption, public-access block, ownership controls, TLS-only bucket
+   policy and lifecycle rule)
+
+Plan: 9 to add, 0 to change, 0 to destroy.
+
+$ terraform apply bootstrap.tfplan
+aws_s3_bucket.state: Creation complete after 2s [id=eks-gitops-platform-tfstate-1794939771]
+aws_s3_bucket_public_access_block.state: Creation complete after 0s
+aws_s3_bucket_ownership_controls.state: Creation complete after 1s
+aws_s3_bucket_policy.state: Creation complete after 1s
+aws_s3_bucket_versioning.state: Creation complete after 2s
+aws_kms_key.state: Creation complete after 14s [id=13e7fc18-daa6-40ce-a5a2-569b7bbc0976]
+aws_kms_alias.state: Creation complete after 0s [id=alias/eks-gitops-platform-tfstate]
+aws_s3_bucket_server_side_encryption_configuration.state: Creation complete after 1s
+aws_s3_bucket_lifecycle_configuration.state: Creation complete after 1m22s
+
+Apply complete! Resources: 9 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+state_bucket_name = "eks-gitops-platform-tfstate-1794939771"
+state_kms_key_arn = "arn:aws:kms:eu-north-1:963910216975:key/13e7fc18-daa6-40ce-a5a2-569b7bbc0976"

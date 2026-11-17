@@ -1,0 +1,28 @@
+# Phase 1 evidence: prod environment, init, validate and plan (nothing applied)
+# Captured 2026-11-17, Terraform 1.13.4. Backend initialised against the prod state key
+# in the shared bucket. Full capture: raw/prod-init.txt, raw/prod-validate.txt, raw/prod-plan.txt.
+
+$ terraform init -backend-config="bucket=$TF_STATE_BUCKET" -backend-config="kms_key_id=$TF_STATE_KMS_KEY"
+Successfully configured the backend "s3"!
+
+$ terraform validate
+Success! The configuration is valid.
+
+$ terraform plan -var-file=prod.tfvars
+  # module.network.aws_cloudwatch_log_group.flow_logs will be created
+  # module.network.aws_default_security_group.this will be created
+  # module.network.aws_flow_log.this will be created
+  # module.network.aws_iam_role.flow_logs will be created
+  # module.network.aws_iam_role_policy.flow_logs will be created
+  # module.network.aws_internet_gateway.this will be created
+  # module.network.aws_kms_key.flow_logs will be created
+  # module.network.aws_route.public_internet will be created
+  # module.network.aws_route_table.private will be created
+  # module.network.aws_route_table.public will be created
+  # module.network.aws_route_table_association.private[0,1,2] will be created
+  # module.network.aws_route_table_association.public[0,1,2] will be created
+  # module.network.aws_subnet.private[0,1,2] will be created
+  # module.network.aws_subnet.public[0,1,2] will be created
+  # module.network.aws_vpc.this will be created
+
+Plan: 23 to add, 0 to change, 0 to destroy.

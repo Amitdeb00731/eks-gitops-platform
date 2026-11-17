@@ -192,14 +192,14 @@ Captured during the AWS steps:
 _These boxes are an operator runbook for a reader reproducing this phase. The
 as-built result is recorded in the evidence files, not in these boxes._
 
-- [ ] Policy gate shown failing on a bad configuration, then passing
-- [ ] Bootstrap applied; state bucket and KMS key exist
-- [ ] Each environment initialised against its own state key
-- [ ] `terraform validate` clean for dev, staging and prod
-- [ ] `terraform plan` captured for dev, staging and prod
-- [ ] State lock shown refusing a concurrent run
-- [ ] Provider lock file committed with Windows and Linux hashes
-- [ ] Evidence saved under `evidence/phase1/`
+- [x] Policy gate shown failing on a bad configuration, then passing
+- [x] Bootstrap applied; state bucket and KMS key exist
+- [x] Each environment initialised against its own state key
+- [x] `terraform validate` clean for dev, staging and prod
+- [x] `terraform plan` captured for dev, staging and prod
+- [x] State lock shown refusing a concurrent run
+- [x] Provider lock file committed with Windows and Linux hashes
+- [x] Evidence saved under `evidence/phase1/`
 
 **Next, Phase 2:** add the EKS module (cluster, managed node group, OIDC provider
 for IAM roles for service accounts) and the load balancer controller, apply dev
