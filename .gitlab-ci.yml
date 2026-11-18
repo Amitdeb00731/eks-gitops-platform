@@ -35,13 +35,19 @@ build-image:
     entrypoint: [""]
   script:
     # Kaniko builds and pushes the image with no Docker daemon. It authenticates
-    # to the project registry with the job's own CI_REGISTRY credentials.
+    # to the project registry with the job's own CI_REGISTRY credentials. The
+    # auth file and the executor call are written as literal block scalars so
+    # YAML does not try to interpret the braces, quotes or colons inside them.
     - mkdir -p /kaniko/.docker
-    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
-    - /kaniko/executor
-      --context "$CI_PROJECT_DIR/$APP_DIR"
-      --dockerfile "$CI_PROJECT_DIR/$APP_DIR/Dockerfile"
-      --destination "$IMAGE:$TAG"
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {"auths":{"$CI_REGISTRY":{"username":"$CI_REGISTRY_USER","password":"$CI_REGISTRY_PASSWORD"}}}
+      EOF
+    - |
+      /kaniko/executor \
+        --context "$CI_PROJECT_DIR/$APP_DIR" \
+        --dockerfile "$CI_PROJECT_DIR/$APP_DIR/Dockerfile" \
+        --destination "$IMAGE:$TAG"
 
 trivy-scan:
   stage: scan
