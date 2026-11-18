@@ -54,6 +54,12 @@ trivy-scan:
   image:
     name: aquasec/trivy:0.58.1
     entrypoint: [""]
+  variables:
+    # Trivy pulls the image from the project's private registry, so it needs the
+    # job's own registry credentials. Without them the pull is anonymous and the
+    # registry returns DENIED.
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
   script:
     # Fail the pipeline on any fixable HIGH or CRITICAL finding, which stops the
     # image before it can be signed or promoted. This is the gate the "fail then
