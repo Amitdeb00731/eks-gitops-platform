@@ -55,7 +55,7 @@ What caught us out:
   the Phase 1 files locally; they were restored from the pushed branch. The commit
   on the remote was never at risk.
 
-### Phase 2: EKS cluster and workload identity (code ready, live run pending)
+### Phase 2: EKS cluster and workload identity (complete)
 
 Situation: the platform needs a running cluster with least privilege at the
 workload layer, brought up briefly for evidence and torn down the same day.
@@ -70,14 +70,29 @@ service account), the committed load balancer controller policy (pinned to
 controller release v3.6.1), and the two IRSA roles in dev. Turned the dev NAT
 gateway on for node egress.
 
-Result: fmt clean; the irsa module and the full dev wiring validate (the cluster
-module checked against a stub matching the v21 interface, since the community
-module cannot be fetched offline); the load balancer policy JSON parses; Checkov
-135 passed, 0 failed, 16 skips. The live apply, the IRSA proof and the load
-balancer evidence are captured on the operator workstation during the bring-up.
+Result: code validated offline (fmt clean; the irsa module and the full dev wiring
+validate, the cluster module checked against a stub matching the v21 interface
+since the community module cannot be fetched offline; the load balancer policy
+JSON parses; Checkov 135 passed, 0 failed, 16 skips). Live run on 2026-11-18: two
+nodes reached Ready on Kubernetes 1.33; IRSA proven, the annotated pod assumed
+dev-irsa-demo and listed buckets while an unannotated pod received no credentials;
+the Load Balancer Controller v3.6.3 installed on its IRSA role and provisioned an
+internet-facing NLB that served a test application over the public internet. Torn
+down the same day, 70 resources destroyed, sweep clean. Evidence in
+evidence/phase2/.
 
 What caught us out:
 
+- The node group first failed to join with no egress at boot. Every VPC-level
+  setting was correct, and the NAT gateway was forwarding packets out while none
+  came back. The cause was an account-level control, VPC Block Public Access in
+  block-bidirectional mode, enabled during the Build 2 hardening, which blocks
+  internet gateway traffic for the whole region independent of routes and security
+  groups. A guardrail we had set earlier blocked the new build. The fix was a
+  scoped, reversible exclusion for the one VPC, removed at teardown, leaving the
+  guardrail in force everywhere else. This is a data-plane control, which a Service
+  Control Policy is not, so no SCP review would have found it; the NAT gateway
+  metrics (packets out, none back) did.
 - The community EKS module cannot be downloaded in the offline build environment,
   so Phase 2's Terraform is validated on the laptop during the live run, which is
   where a live-tier phase is proven anyway (ADR 0006).
