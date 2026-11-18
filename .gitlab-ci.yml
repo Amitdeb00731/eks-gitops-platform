@@ -1,0 +1,107 @@
+# GitLab CI for the sample app: test, build, scan, sign, then promote by writing
+# the new image tag into the manifests ArgoCD watches. The pipeline never touches
+# the cluster. It writes to Git, and ArgoCD reconciles the cluster to Git, so no
+# CI job ever holds cluster credentials.
+#
+# Prerequisites (set once in the GitLab project):
+#   - The project's built-in Container Registry is enabled (default).
+#   - A project access token with write_repository scope, exposed as the CI/CD
+#     variable PROMOTE_TOKEN, so the promote stage can push the tag bump back.
+
+stages:
+  - test
+  - build
+  - scan
+  - sign
+  - promote
+
+variables:
+  APP_DIR: kubernetes/base/app
+  IMAGE: $CI_REGISTRY_IMAGE/sample-app
+  TAG: $CI_COMMIT_SHORT_SHA
+
+unit-test:
+  stage: test
+  image: golang:1.24
+  script:
+    - cd "$APP_DIR"
+    - go vet ./...
+    - go test ./...
+
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    # Kaniko builds and pushes the image with no Docker daemon. It authenticates
+    # to the project registry with the job's own CI_REGISTRY credentials. The
+    # auth file and the executor call are written as literal block scalars so
+    # YAML does not try to interpret the braces, quotes or colons inside them.
+    - mkdir -p /kaniko/.docker
+    - |
+      cat > /kaniko/.docker/config.json <<EOF
+      {"auths":{"$CI_REGISTRY":{"username":"$CI_REGISTRY_USER","password":"$CI_REGISTRY_PASSWORD"}}}
+      EOF
+    - |
+      /kaniko/executor \
+        --context "$CI_PROJECT_DIR/$APP_DIR" \
+        --dockerfile "$CI_PROJECT_DIR/$APP_DIR/Dockerfile" \
+        --destination "$IMAGE:$TAG"
+
+trivy-scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.58.1
+    entrypoint: [""]
+  variables:
+    # Trivy pulls the image from the project's private registry, so it needs the
+    # job's own registry credentials. Without them the pull is anonymous and the
+    # registry returns DENIED.
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+  script:
+    # Fail the pipeline on any fixable HIGH or CRITICAL finding, which stops the
+    # image before it can be signed or promoted. This is the gate the "fail then
+    # prove" demonstration exercises.
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$IMAGE:$TAG"
+
+cosign-sign:
+  stage: sign
+  # The official cosign image is distroless and has no shell, so GitLab cannot
+  # run script steps in it. Use Alpine, which has a shell, and fetch the pinned
+  # cosign binary the same way the promote stage fetches kustomize.
+  image: alpine:3.21
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - apk add --no-cache curl
+    - curl -sSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64
+    - chmod +x /usr/local/bin/cosign
+    # Keyless signing with the pipeline's own OIDC identity. The signature is
+    # stored in the registry beside the image; no private key is held anywhere.
+    # cosign needs registry credentials to write the signature back.
+    - cosign login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD"
+    - cosign sign --yes "$IMAGE:$TAG"
+
+promote:
+  stage: promote
+  image: alpine:3.21
+  rules:
+    # Only promote from the default branch, so feature branches are built,
+    # tested, scanned and signed but do not change what is deployed.
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache git curl
+    - curl -sSLo /usr/local/bin/kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.5.0/kustomize_v5.5.0_linux_amd64.tar.gz
+    - tar -xzf /usr/local/bin/kustomize.tar.gz -C /usr/local/bin && chmod +x /usr/local/bin/kustomize
+    - cd "$CI_PROJECT_DIR/kubernetes/base"
+    - kustomize edit set image "sample-app=$IMAGE:$TAG"
+    - cd "$CI_PROJECT_DIR"
+    - git config user.email "ci@$CI_SERVER_HOST"
+    - git config user.name "gitlab-ci"
+    - git add kubernetes/base/kustomization.yaml
+    # Skip CI on the promote commit so it does not trigger its own pipeline.
+    - git commit -m "Promote sample-app to $TAG [skip ci]" || echo "no change to promote"
+    - git push "https://oauth2:$PROMOTE_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "HEAD:$CI_DEFAULT_BRANCH"

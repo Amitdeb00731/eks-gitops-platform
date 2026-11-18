@@ -1,0 +1,26 @@
+# A child Application, one per workload. It names a path in this repository and a
+# destination namespace. ArgoCD auto-syncs it, prunes resources removed from Git,
+# and self-heals drift, so the cluster cannot quietly diverge from the reviewed
+# state in Git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sample-app
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitlab.com/portfolio-group5140947/eks-gitops-platform.git
+    targetRevision: main
+    path: kubernetes/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sample-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

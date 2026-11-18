@@ -1,0 +1,24 @@
+# The app-of-apps root. ArgoCD watches kubernetes/argocd/apps and reconciles
+# whatever child Applications are committed there, so the set of running
+# workloads is itself under version control. Adding a workload is a commit to
+# that directory, not a console action.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://gitlab.com/portfolio-group5140947/eks-gitops-platform.git
+    targetRevision: main
+    path: kubernetes/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
