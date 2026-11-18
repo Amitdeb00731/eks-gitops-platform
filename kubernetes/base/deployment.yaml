@@ -15,10 +15,18 @@ spec:
       labels:
         app.kubernetes.io/name: sample-app
     spec:
+      # Pull the image from the private GitLab registry. The secret holds a
+      # read_registry deploy token and is created out of band in the namespace,
+      # so no credential is committed to Git, only the secret's name.
+      imagePullSecrets:
+        - name: gitlab-registry
       # Pod-level hardening: never run as root, and use the runtime's default
-      # seccomp profile.
+      # seccomp profile. The UID/GID match the distroless nonroot user baked into
+      # the image, so the kubelet can confirm the container is non-root.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
