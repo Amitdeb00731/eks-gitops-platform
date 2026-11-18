@@ -6,10 +6,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 // version is reported on the root path. A deployment sets APP_VERSION; the
@@ -44,8 +49,39 @@ func main() {
 		addr = ":" + p
 	}
 
-	log.Printf("sample app %s listening on %s", version(), addr)
-	if err := http.ListenAndServe(addr, newMux()); err != nil {
-		log.Fatal(err)
+	// Timeouts bound how long a client may hold a connection open, which closes
+	// off the Slowloris class of slow-client attacks. Without them a few idle
+	// connections can tie the server up.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           newMux(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+
+	// Kubernetes sends SIGTERM before it removes a pod during a rolling update.
+	// Catch it, stop accepting new connections, and drain the in-flight ones so
+	// no request is cut off mid-response.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("sample app %s listening on %s", version(), addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("listen: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	stop()
+	log.Println("shutdown signal received, draining connections")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("graceful shutdown failed: %v", err)
+	}
+	log.Println("stopped cleanly")
 }
