@@ -15,5 +15,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/app .
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/app /app
 EXPOSE 8080
-USER nonroot:nonroot
+# Use the distroless nonroot UID/GID numerically, not the name. With a named
+# user the kubelet cannot verify the container is non-root under
+# runAsNonRoot: true and rejects the pod with CreateContainerConfigError.
+USER 65532:65532
 ENTRYPOINT ["/app"]

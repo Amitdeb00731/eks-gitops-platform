@@ -22,7 +22,9 @@ variables:
 
 unit-test:
   stage: test
-  image: golang:1.24
+  # Same Go version the Dockerfile builds the shipped binary with, so the tests
+  # exercise the toolchain that produces the image.
+  image: golang:1.27
   script:
     - cd "$APP_DIR"
     - go vet ./...
@@ -78,6 +80,9 @@ cosign-sign:
   script:
     - apk add --no-cache curl
     - curl -sSLo /usr/local/bin/cosign https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64
+    # Verify the binary against its pinned checksum before it runs with the job's
+    # OIDC signing identity. A tampered download fails here instead of signing.
+    - echo "8b24b946dd5809c6bd93de08033bcf6bc0ed7d336b7785787c080f574b89249b  /usr/local/bin/cosign" | sha256sum -c -
     - chmod +x /usr/local/bin/cosign
     # Keyless signing with the pipeline's own OIDC identity. The signature is
     # stored in the registry beside the image; no private key is held anywhere.
@@ -88,14 +93,25 @@ cosign-sign:
 promote:
   stage: promote
   image: alpine:3.21
+  # Serialise promotes. Without this two pipelines can promote at once and an
+  # older image SHA can overwrite a newer one.
+  resource_group: promote
   rules:
     # Only promote from the default branch, so feature branches are built,
     # tested, scanned and signed but do not change what is deployed.
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   script:
     - apk add --no-cache git curl
-    - curl -sSLo /usr/local/bin/kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.5.0/kustomize_v5.5.0_linux_amd64.tar.gz
-    - tar -xzf /usr/local/bin/kustomize.tar.gz -C /usr/local/bin && chmod +x /usr/local/bin/kustomize
+    - curl -sSLo /tmp/kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.5.0/kustomize_v5.5.0_linux_amd64.tar.gz
+    # Verify the archive against its pinned checksum before extracting a binary
+    # that runs with the promote push token.
+    - echo "6703a3a70a0c47cf0b37694030b54f1175a9dfeb17b3818b623ed58b9dbc2a77  /tmp/kustomize.tar.gz" | sha256sum -c -
+    - tar -xzf /tmp/kustomize.tar.gz -C /usr/local/bin && chmod +x /usr/local/bin/kustomize
+    # Re-apply the tag on the current default-branch head so the push is always a
+    # fast-forward, even if another merge or promote landed since this pipeline
+    # started.
+    - git fetch origin "$CI_DEFAULT_BRANCH"
+    - git checkout -B "$CI_DEFAULT_BRANCH" "origin/$CI_DEFAULT_BRANCH"
     - cd "$CI_PROJECT_DIR/kubernetes/base"
     - kustomize edit set image "sample-app=$IMAGE:$TAG"
     - cd "$CI_PROJECT_DIR"
@@ -103,5 +119,5 @@ promote:
     - git config user.name "gitlab-ci"
     - git add kubernetes/base/kustomization.yaml
     # Skip CI on the promote commit so it does not trigger its own pipeline.
-    - git commit -m "Promote sample-app to $TAG [skip ci]" || echo "no change to promote"
+    - git commit -m "Promote sample-app to $TAG [skip ci]" || { echo "nothing to promote"; exit 0; }
     - git push "https://oauth2:$PROMOTE_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "HEAD:$CI_DEFAULT_BRANCH"

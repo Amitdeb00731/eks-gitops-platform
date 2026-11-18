@@ -16,9 +16,12 @@ spec:
         app.kubernetes.io/name: sample-app
     spec:
       # Pod-level hardening: never run as root, and use the runtime's default
-      # seccomp profile.
+      # seccomp profile. The UID/GID match the distroless nonroot user baked into
+      # the image, so the kubelet can confirm the container is non-root.
       securityContext:
         runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
       containers:
