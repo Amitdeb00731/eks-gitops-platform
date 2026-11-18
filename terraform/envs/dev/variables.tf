@@ -30,3 +30,30 @@ variable "enable_nat_gateway" {
   type    = bool
   default = false
 }
+
+# --- EKS (Phase 2) ---
+
+variable "kubernetes_version" {
+  type    = string
+  default = "1.33"
+}
+
+variable "endpoint_public_access_cidrs" {
+  type    = list(string)
+  default = ["0.0.0.0/0"]
+}
+
+variable "node_instance_types" {
+  type    = list(string)
+  default = ["t3.medium"]
+}
+
+variable "node_capacity_type" {
+  type    = string
+  default = "ON_DEMAND"
+}
+
+variable "node_desired_size" {
+  type    = number
+  default = 2
+}

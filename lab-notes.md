@@ -54,3 +54,34 @@ What caught us out:
 - A repeated `git checkout -B` reset the working tree to the scaffold and dropped
   the Phase 1 files locally; they were restored from the pushed branch. The commit
   on the remote was never at risk.
+
+### Phase 2: EKS cluster and workload identity (code ready, live run pending)
+
+Situation: the platform needs a running cluster with least privilege at the
+workload layer, brought up briefly for evidence and torn down the same day.
+
+Task: write the EKS cluster, a reusable IRSA module, and the load balancer
+controller role, wired into dev, and validate as far as an offline build allows.
+
+Action (2026-11-17): added modules/eks (community EKS module v21, wrapped with
+secure defaults: OIDC on, KMS secret encryption, control-plane logging, access
+entries), a native modules/irsa (OIDC-federated trust pinned to a namespace and
+service account), the committed load balancer controller policy (pinned to
+controller release v3.6.1), and the two IRSA roles in dev. Turned the dev NAT
+gateway on for node egress.
+
+Result: fmt clean; the irsa module and the full dev wiring validate (the cluster
+module checked against a stub matching the v21 interface, since the community
+module cannot be fetched offline); the load balancer policy JSON parses; Checkov
+135 passed, 0 failed, 16 skips. The live apply, the IRSA proof and the load
+balancer evidence are captured on the operator workstation during the bring-up.
+
+What caught us out:
+
+- The community EKS module cannot be downloaded in the offline build environment,
+  so Phase 2's Terraform is validated on the laptop during the live run, which is
+  where a live-tier phase is proven anyway (ADR 0006).
+- CKV_TF_1 wants a commit hash for the module source. Registry modules are pinned
+  by version, so this is a documented skip, and the module is pinned to a patch
+  range.
+
