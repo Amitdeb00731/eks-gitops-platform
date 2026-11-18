@@ -1,0 +1,89 @@
+# GitLab CI for the sample app: test, build, scan, sign, then promote by writing
+# the new image tag into the manifests ArgoCD watches. The pipeline never touches
+# the cluster. It writes to Git, and ArgoCD reconciles the cluster to Git, so no
+# CI job ever holds cluster credentials.
+#
+# Prerequisites (set once in the GitLab project):
+#   - The project's built-in Container Registry is enabled (default).
+#   - A project access token with write_repository scope, exposed as the CI/CD
+#     variable PROMOTE_TOKEN, so the promote stage can push the tag bump back.
+
+stages:
+  - test
+  - build
+  - scan
+  - sign
+  - promote
+
+variables:
+  APP_DIR: kubernetes/base/app
+  IMAGE: $CI_REGISTRY_IMAGE/sample-app
+  TAG: $CI_COMMIT_SHORT_SHA
+
+unit-test:
+  stage: test
+  image: golang:1.24
+  script:
+    - cd "$APP_DIR"
+    - go vet ./...
+    - go test ./...
+
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    # Kaniko builds and pushes the image with no Docker daemon. It authenticates
+    # to the project registry with the job's own CI_REGISTRY credentials.
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor
+      --context "$CI_PROJECT_DIR/$APP_DIR"
+      --dockerfile "$CI_PROJECT_DIR/$APP_DIR/Dockerfile"
+      --destination "$IMAGE:$TAG"
+
+trivy-scan:
+  stage: scan
+  image:
+    name: aquasec/trivy:0.58.1
+    entrypoint: [""]
+  script:
+    # Fail the pipeline on any fixable HIGH or CRITICAL finding, which stops the
+    # image before it can be signed or promoted. This is the gate the "fail then
+    # prove" demonstration exercises.
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$IMAGE:$TAG"
+
+cosign-sign:
+  stage: sign
+  image:
+    name: gcr.io/projectsigstore/cosign:v2.4.1
+    entrypoint: [""]
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    # Keyless signing with the pipeline's own OIDC identity. The signature is
+    # stored in the registry beside the image; no private key is held anywhere.
+    - cosign sign --yes "$IMAGE:$TAG"
+
+promote:
+  stage: promote
+  image: alpine:3.21
+  rules:
+    # Only promote from the default branch, so feature branches are built,
+    # tested, scanned and signed but do not change what is deployed.
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - apk add --no-cache git curl
+    - curl -sSLo /usr/local/bin/kustomize.tar.gz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.5.0/kustomize_v5.5.0_linux_amd64.tar.gz
+    - tar -xzf /usr/local/bin/kustomize.tar.gz -C /usr/local/bin && chmod +x /usr/local/bin/kustomize
+    - cd "$CI_PROJECT_DIR/kubernetes/base"
+    - kustomize edit set image "sample-app=$IMAGE:$TAG"
+    - cd "$CI_PROJECT_DIR"
+    - git config user.email "ci@$CI_SERVER_HOST"
+    - git config user.name "gitlab-ci"
+    - git add kubernetes/base/kustomization.yaml
+    # Skip CI on the promote commit so it does not trigger its own pipeline.
+    - git commit -m "Promote sample-app to $TAG [skip ci]" || echo "no change to promote"
+    - git push "https://oauth2:$PROMOTE_TOKEN@$CI_SERVER_HOST/$CI_PROJECT_PATH.git" "HEAD:$CI_DEFAULT_BRANCH"
